@@ -393,7 +393,7 @@ Public Function InitUsingUcs2() as Boolean
             obj_type_name = obj_type_split(0)
             obj_type_num = Val(obj_type_split(1))
             If CurrentDb.Containers(obj_type_name).Documents.Count > 0 Then
-                obj_name = CurrentDb.Containers(obj_type_name).Documents(1).Name
+                obj_name = CurrentDb.Containers(obj_type_name).Documents(0).Name
                 Exit For
             End If
         Next
