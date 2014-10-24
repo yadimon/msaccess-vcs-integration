@@ -2,7 +2,7 @@ Attribute VB_Name = "AppCodeImportExport"
 ' Access Module `AppCodeImportExport`
 ' -----------------------------------
 '
-' Version 0.12
+' Version 0.15
 '
 ' https://github.com/bkidwell/msaccess-vcs-integration
 '
@@ -15,6 +15,10 @@ Attribute VB_Name = "AppCodeImportExport"
 ' https://github.com/ArminBra/msaccess-vcs-integration
 '
 ' Armin Braun
+'
+' https://github.com/yadimon/msaccess-vcs-integration
+'
+' Dmitry Gorelenkov
 '
 ' This code is licensed under BSD-style terms.
 '
@@ -275,7 +279,7 @@ Dim sFileName As String
 End Function
 
 ' Export a database object with optional UCS2-to-UTF-8 conversion.
-Private Sub ExportObject(obj_type_num As Integer, obj_name As String, file_path As String, _
+Public Sub ExportObject(obj_type_num As Integer, obj_name As String, file_path As String, _
     Optional Ucs2Convert As Boolean = False)
 
     MkDirIfNotExist Left(file_path, InStrRev(file_path, "\"))
@@ -306,7 +310,7 @@ Public Sub ImportObject(obj_type_num As Integer, obj_name As String, file_path A
 End Sub
 
 ' Binary convert a UCS2-little-endian encoded file to UTF-8.
-Private Sub ConvertUcs2Utf8(Source As String, dest As String)
+Public Sub ConvertUcs2Utf8(Source As String, dest As String)
     Dim f_in As BinFile, f_out As BinFile
     Dim in_low As Integer, in_high As Integer
 
@@ -336,7 +340,7 @@ Private Sub ConvertUcs2Utf8(Source As String, dest As String)
 End Sub
 
 ' Binary convert a UTF-8 encoded file to UCS2-little-endian.
-Private Sub ConvertUtf8Ucs2(Source As String, dest As String)
+Public Sub ConvertUtf8Ucs2(Source As String, dest As String)
     Dim f_in As BinFile, f_out As BinFile
     Dim in_1 As Integer, in_2 As Integer, in_3 As Integer
 
@@ -369,7 +373,7 @@ End Sub
 
 ' Determine if this database imports/exports code as UCS-2-LE. (Older file
 ' formats cause exported objects to use a Windows 8-bit character set.)
-Private Sub InitUsingUcs2()
+Public Function InitUsingUcs2() as Boolean
     Dim obj_name As String, i As Integer, obj_type As Variant, fn As Integer, bytes As String
     Dim obj_type_split() As String, obj_type_name As String, obj_type_num As Integer
     Dim Db As Object ' DAO.Database
@@ -398,7 +402,8 @@ Private Sub InitUsingUcs2()
     If obj_name = "" Then
         ' No objects found that can be used to test UCS2 versus UTF-8
         UsingUcs2 = True
-        Exit Sub
+        InitUsingUcs2 = True
+        Exit Function
     End If
 
     Dim tempFileName As String: tempFileName = TempFile()
@@ -417,7 +422,9 @@ Private Sub InitUsingUcs2()
     Dim FSO As Object
     Set FSO = CreateObject("Scripting.FileSystemObject")
     FSO.DeleteFile (tempFileName)
-End Sub
+    
+    InitUsingUcs2 = UsingUcs2
+End Function
 
 ' Create folder `Path`. Silently do nothing if it already exists.
 Private Sub MkDirIfNotExist(Path As String)
@@ -454,15 +461,32 @@ End Sub
 ' unnecessary lines of VB code that are inserted automatically by the
 ' Access GUI and change often (we don't want these lines of code in
 ' version control).
-Private Sub SanitizeTextFiles(Path As String, Ext As String)
+Public Sub SanitizeTextFiles(Path As String, Ext As String)
+    Dim fileName As String, sFullPath As String
 
+    fileName = Dir(Path & "*." & Ext)
+    Do Until Len(fileName) = 0
+        sFullPath = Path & fileName
+        SanitizeTextFile sFullPath
+    Loop
 
-    Dim FSO As Object
+End Sub
+
+Public Sub SanitizeTextFile(sFilePath As String)
+    Dim FSO As Object, InFile As Object, OutFile As Object
+    Dim fileName As String, obj_name As String
+    Dim Path As String, sOutFileName As String
+    
     Set FSO = CreateObject("Scripting.FileSystemObject")
+    
+    Path = FileTools.GetDirFromFullFileName(sFilePath)
+    fileName = FileTools.FileNameWithoutPath(sFilePath)
+    obj_name = Mid(fileName, 1, InStrRev(fileName, ".") - 1)
+    
     '
     '  Setup Block matching Regex.
-    Dim rxBlock As Object
-    Set rxBlock = CreateObject("VBScript.RegExp")
+    Static rxBlock As Object
+    If rxBlock Is Nothing Then Set rxBlock = CreateObject("VBScript.RegExp")
     rxBlock.ignoreCase = False
     '
     '  Match PrtDevNames / Mode with or  without W
@@ -492,20 +516,14 @@ Private Sub SanitizeTextFiles(Path As String, Ext As String)
     srchPattern = srchPattern & ")"
 'Debug.Print srchPattern
     rxLine.Pattern = srchPattern
-    Dim fileName As String
-    fileName = Dir(Path & "*." & Ext)
-    
-    Do Until Len(fileName) = 0
-        DoEvents
-        Dim obj_name As String
-        obj_name = Mid(fileName, 1, InStrRev(fileName, ".") - 1)
 
-        Dim InFile As Object
-        Set InFile = FSO.OpenTextFile(Path & obj_name & "." & Ext, ForReading)
-        Dim OutFile As Object
-        Set OutFile = FSO.CreateTextFile(Path & obj_name & ".sanitize", True)
+        DoEvents
+        Set InFile = FSO.OpenTextFile(sFilePath, ForReading)
+        sOutFileName = sFilePath & ".sanitize"
+        Set OutFile = FSO.CreateTextFile(sOutFileName, True)
     
         Dim getLine As Boolean: getLine = True
+ 
         Do Until InFile.AtEndOfStream
             DoEvents
             Dim txt As String
@@ -528,7 +546,7 @@ Private Sub SanitizeTextFiles(Path As String, Ext As String)
                 Set matches = rxIndent.Execute(txt)
                 '
                 ' Setup pattern to match current indent
-                Select Case matches.Count
+                Select Case matches.count
                     Case 0
                         rxIndent.Pattern = "^" & vbNullString
                     Case Else
@@ -547,27 +565,28 @@ Private Sub SanitizeTextFiles(Path As String, Ext As String)
             '
             ' skip blocks of code matching block pattern
             ElseIf rxBlock.Test(txt) Then
+ 
                 Do Until InFile.AtEndOfStream
                     txt = InFile.ReadLine
                     If InStr(txt, "End") Then Exit Do
                 Loop
+ 
             Else
                 OutFile.WriteLine txt
             End If
         Loop
         OutFile.Close
         InFile.Close
-
+ 
         FSO.DeleteFile (Path & fileName)
-
+ 
         Dim thisFile As Object
-        Set thisFile = FSO.GetFile(Path & obj_name & ".sanitize")
+        Set thisFile = FSO.GetFile(sOutFileName)
         thisFile.Move (Path & fileName)
         fileName = Dir()
-    Loop
-
 
 End Sub
+
 ' Import References from a CSV, true=SUCCESS
 Private Function ImportReferences(obj_path As String) As Boolean
     Dim FSO, InFile
